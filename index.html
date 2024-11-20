@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Comparison Tool</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7fc;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            width: 90%;
+            max-width: 600px;
+        }
+
+        h2 {
+            text-align: center;
+            color: #333;
+        }
+
+        p {
+            font-size: 16px;
+            color: #555;
+            text-align: center;
+        }
+
+        .file-input {
+            display: flex;
+            flex-direction: column;
+            margin: 15px 0;
+        }
+
+        .file-input label {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .file-input input[type="file"] {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            background-color: #4CAF50;
+            color: white;
+            font-size: 18px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        .results {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .results ul {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        .results ul li {
+            padding: 10px;
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            margin-bottom: 5px;
+            border-radius: 4px;
+        }
+
+        .results ul li.no-difference {
+            background-color: #d4edda;
+            color: #155724;
+            border-color: #c3e6cb;
+        }
+
+        .loading {
+            text-align: center;
+            font-size: 18px;
+            color: #4CAF50;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Compare Your Document with the Standard</h2>
+        <p>Please upload your document (File 2) and the standard document (File 1) for comparison.</p>
+
+        <div class="file-input">
+            <label for="fileInput1">Standard Document (File 1)</label>
+            <input type="file" id="fileInput1" accept=".pdf,.docx,.xlsx" />
+        </div>
+
+        <div class="file-input">
+            <label for="fileInput2">Your Document (File 2)</label>
+            <input type="file" id="fileInput2" accept=".pdf,.docx,.xlsx" />
+        </div>
+
+        <button onclick="checkDocuments()">Compare Documents</button>
+
+        <div class="loading" id="loadingText">Comparing documents... Please wait.</div>
+
+        <div class="results" id="outputSection">
+            <h3>Comparison Results</h3>
+            <ul id="missingPartsList"></ul>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.2/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.4/xlsx.full.min.js"></script>
+
+    <script>
+        // Extract text from PDF file
+        function extractTextFromPDF(file, callback) {
+            const fileReader = new FileReader();
+            fileReader.onload = function(e) {
+                const pdfData = new Uint8Array(e.target.result);
+                pdfjsLib.getDocument(pdfData).promise.then(function(pdf) {
+                    let text = '';
+                    let count = 0;
+                    const totalPages = pdf.numPages;
+
+                    for (let i = 1; i <= totalPages; i++) {
+                        pdf.getPage(i).then(function(page) {
+                            page.getTextContent().then(function(content) {
+                                text += content.items.map(item => item.str).join(' ') + '\n';
+                                count++;
+
+                                if (count === totalPages) {
+                                    callback(text);
+                                }
+                            });
+                        });
+                    }
+                });
+            };
+            fileReader.readAsArrayBuffer(file);
+        }
+
+        // Extract text from DOCX file
+        function extractTextFromDOCX(file, callback) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                mammoth.extractRawText({ arrayBuffer: e.target.result })
+                    .then(function(result) {
+                        callback(result.value);
+                    });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Extract text from Excel file
+        function extractTextFromExcel(file, callback) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const workbook = XLSX.read(e.target.result, { type: 'array' });
+                let text = '';
+                workbook.SheetNames.forEach(function(sheetName) {
+                    const sheet = workbook.Sheets[sheetName];
+                    const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                    json.forEach(row => {
+                        text += row.join(' ') + '\n';
+                    });
+                });
+                callback(text);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Function to extract the content for a specific section (e.g., Name, Skills)
+        function extractSectionContent(text, section) {
+            const regex = new RegExp(`${section}:\\s*(.*?)(?=\n[A-Za-z]+:|$)`, 'i');
+            const match = text.match(regex);
+            return match ? match[1].trim() : null;
+        }
+
+        // Compare two documents for specific sections
+        function compareDocuments(text1, text2) {
+            const sections = ['Name', 'Skills', 'Experience', 'Contact', 'Summary'];
+            let missingParts = [];
+
+            sections.forEach(section => {
+                const content1 = extractSectionContent(text1, section);
+                const content2 = extractSectionContent(text2, section);
+
+                if (!content1) {
+                    missingParts.push(`${section} section is missing in document 1.`);
+                }
+
+                if (!content2) {
+                    missingParts.push(`${section} section is missing in document 2.`);
+                }
+
+                if (content1 && content2 && content1 !== content2) {
+                    missingParts.push(`${section} content differs between the documents.`);
+                }
+            });
+
+            return missingParts;
+        }
+
+        // Check the uploaded documents and compare them
+        function checkDocuments() {
+            const fileInput1 = document.getElementById('fileInput1').files[0];
+            const fileInput2 = document.getElementById('fileInput2').files[0];
+            const missingPartsList = document.getElementById('missingPartsList');
+            const outputSection = document.getElementById('outputSection');
+            const loadingText = document.getElementById('loadingText');
+
+            if (!fileInput1 || !fileInput2) {
+                alert('Please upload both documents.');
+                return;
+            }
+
+            missingPartsList.innerHTML = '';  // Clear previous results
+            outputSection.style.display = 'none';  // Hide results initially
+            loadingText.style.display = 'block';  // Show loading message
+
+            // Extract text from both documents
+            const text1Promise = new Promise((resolve, reject) => {
+                if (fileInput1.type === 'application/pdf') {
+                    extractTextFromPDF(fileInput1, resolve);
+                } else if (fileInput1.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    extractTextFromDOCX(fileInput1, resolve);
+                } else if (fileInput1.type.startsWith('application/vnd.ms-excel')) {
+                    extractTextFromExcel(fileInput1, resolve);
+                } else {
+                    reject('Unsupported file type for document 1');
+                }
+            });
+
+            const text2Promise = new Promise((resolve, reject) => {
+                if (fileInput2.type === 'application/pdf') {
+                    extractTextFromPDF(fileInput2, resolve);
+                } else if (fileInput2.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    extractTextFromDOCX(fileInput2, resolve);
+                } else if (fileInput2.type.startsWith('application/vnd.ms-excel')) {
+                    extractTextFromExcel(fileInput2, resolve);
+                } else {
+                    reject('Unsupported file type for document 2');
+                }
+            });
+
+            // When both documents are ready, compare them
+            Promise.all([text1Promise, text2Promise])
+                .then(([text1, text2]) => {
+                    const missingParts = compareDocuments(text1, text2);
+
+                    // Display the comparison results
+                    loadingText.style.display = 'none';  // Hide loading message
+                    outputSection.style.display = 'block';  // Show results
+
+                    if (missingParts.length > 0) {
+                        missingParts.forEach(part => {
+                            const li = document.createElement('li');
+                            li.textContent = part;
+                            missingPartsList.appendChild(li);
+                        });
+                    } else {
+                        missingPartsList.innerHTML = '<li class="no-difference">No differences found.</li>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error processing documents:', error);
+                    loadingText.style.display = 'none';  // Hide loading message
+                    alert('There was an error processing the documents.');
+                });
+        }
+    </script>
+</body>
+</html>
